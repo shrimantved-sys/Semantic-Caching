@@ -12,7 +12,7 @@ When we looked at real-world production query traffic, an obvious pattern emerge
   - *"What is the boiling point of water at sea level?"*
   - *"At what temperature does water boil at sea level?"*
   - *"How hot does water need to be to boil?"*
-  - 
+
 In a standard setup, every single one of those questions triggers a brand-new cloud API call to an LLM. You pay for the prompt tokens, you pay for the generation tokens, and your user sits waiting while the model generates the exact same answer it generated thirty seconds ago for someone else.
 
 Traditional web caches (like Redis exact-key lookups) fail completely here because string hashing is brittle: one typo, a slight paraphrase, or a flipped word order results in a 100% cache miss.
