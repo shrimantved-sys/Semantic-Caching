@@ -24,3 +24,16 @@ We built an inference server with a **Two-Tier Cache Architecture**:
 2. **Tier 2 (Semantic Cosine Match)**: Local sentence embedding comparison that recognizes paraphrases and synonyms, serving cached answers in under 15ms without touching the cloud LLM.
 3. **Cache Miss (Direct Inference)**: Direct, queue-free execution via **Groq's LPU hardware** (`qwen/qwen3.8-27b`), automatically populating the cache for future queries.
 
+##  Architecture & How It Works
+
+```mermaid
+flowchart TD
+    A["User Prompt Incoming"] --> B["Tier 1: Exact Match Hash Lookup"]
+    B -- "Hit (Identical String)" --> C["Return Cached Answer (~0.01ms)"]
+    B -- "Miss" --> D["Compute Normalized Sentence Embedding (all-MiniLM-L6-v2)"]
+    D --> E["Tier 2: Cosine Similarity Scan vs. Cached Vectors"]
+    E -- "Cosine Similarity >= Threshold (e.g. 0.90)" --> F["Return Semantic Match Answer (~10-25ms)"]
+    E -- "Below Threshold / Cold Cache" --> G["Groq LPU LLM Inference (qwen3.8-27b)"]
+    G --> H["Store Response & Embedding in Cache"]
+    H --> I["Return Fresh Generated Answer (~200-400ms)"]
+```
