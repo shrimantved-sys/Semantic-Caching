@@ -29,8 +29,6 @@ GROQ_MODEL_NAME = os.environ.get("GROQ_MODEL_NAME", "qwen/qwen3.8-27b")
 GROQ_API_URL = "https://api.groq.com/openai/v1/chat/completions"
 
 EMBEDDING_MODEL_NAME = "sentence-transformers/all-MiniLM-L6-v2"
-MAX_BATCH_SIZE = 4
-BATCH_TIMEOUT = 0.2
 LOG_FILE_PATH = "telemetry_metrics.jsonl"
 DEFAULT_CACHE_TTL_SECONDS = 3600.0
 AUTO_SHUTDOWN_SECONDS = float(os.environ.get("AUTO_SHUTDOWN_SECONDS", "0"))
@@ -177,29 +175,8 @@ class TwoTierCache:
         return count
 
 
-@dataclass(slots=True)
-class RequestItem:
-    request_id: str
-    prompt: str
-    max_new_tokens: int
-    future: asyncio.Future
-    arrival_time: float
-    embedding: Optional[torch.Tensor] = None
-
-
-@dataclass(slots=True)
-class BatchResult:
-    generated_texts: list[str]
-    processing_time_sec: float
-    prompt_tokens_list: list[int]
-    padded_tokens_list: list[int]
-    generated_tokens_list: list[int]
-    total_model_tokens_list: list[int]
-
-
 # App State
 two_tier_cache = TwoTierCache()
-request_queue: asyncio.Queue[RequestItem] = asyncio.Queue()
 http_client: Optional[httpx.AsyncClient] = None
 
 
@@ -208,119 +185,49 @@ def append_telemetry_log(record: dict) -> None:
         f.write(json.dumps(record) + "\n")
 
 
-async def async_process_batch(prompts: list[str], max_new_tokens: int) -> BatchResult:
+async def async_process_prompt(prompt: str, max_new_tokens: int) -> dict:
     if not GROQ_API_KEY:
         raise RuntimeError("GROQ_API_KEY is not configured. Please set GROQ_API_KEY in your .env file or environment variables.")
     start_time = time.time()
-    batch_size = len(prompts)
     headers = {
         "Authorization": f"Bearer {GROQ_API_KEY}",
         "Content-Type": "application/json"
     }
 
     client = http_client or httpx.AsyncClient(timeout=30.0)
-
-    async def fetch_one(prompt: str) -> dict:
-        resp = await client.post(
-            GROQ_API_URL,
-            headers=headers,
-            json={
-                "model": GROQ_MODEL_NAME,
-                "messages": [{"role": "user", "content": prompt}],
-                "max_tokens": max_new_tokens
-            }
-        )
-        if resp.status_code != 200:
-            raise RuntimeError(f"Groq API error ({resp.status_code}): {resp.text}")
-        return resp.json()
-
-    api_responses = await asyncio.gather(*[fetch_one(p) for p in prompts])
-
-    generated_texts = []
-    prompt_tokens_list = []
-    generated_tokens_list = []
-    total_model_tokens_list = []
-
-    for r in api_responses:
-        text = r["choices"][0]["message"]["content"] or ""
-        usage = r.get("usage", {})
-        p_tok = usage.get("prompt_tokens", len(text.split()))
-        g_tok = usage.get("completion_tokens", len(text.split()))
-        t_tok = usage.get("total_tokens", p_tok + g_tok)
-
-        generated_texts.append(text)
-        prompt_tokens_list.append(p_tok)
-        generated_tokens_list.append(g_tok)
-        total_model_tokens_list.append(t_tok)
-
-    return BatchResult(
-        generated_texts=generated_texts,
-        processing_time_sec=time.time() - start_time,
-        prompt_tokens_list=prompt_tokens_list,
-        padded_tokens_list=[0] * batch_size,
-        generated_tokens_list=generated_tokens_list,
-        total_model_tokens_list=total_model_tokens_list
+    resp = await client.post(
+        GROQ_API_URL,
+        headers=headers,
+        json={
+            "model": GROQ_MODEL_NAME,
+            "messages": [{"role": "user", "content": prompt}],
+            "max_tokens": max_new_tokens
+        }
     )
+    if resp.status_code != 200:
+        raise RuntimeError(f"Groq API error ({resp.status_code}): {resp.text}")
 
+    data = resp.json()
+    gen_text = data["choices"][0]["message"]["content"] or ""
+    usage = data.get("usage", {})
+    p_tok = usage.get("prompt_tokens", len(prompt.split()))
+    g_tok = usage.get("completion_tokens", len(gen_text.split()))
+    t_tok = usage.get("total_tokens", p_tok + g_tok)
+    proc_time_sec = time.time() - start_time
 
-async def batch_worker():
-    while True:
-        first_item = await request_queue.get()
-        batch: list[RequestItem] = [first_item]
-        deadline = time.time() + BATCH_TIMEOUT
-
-        while len(batch) < MAX_BATCH_SIZE:
-            remaining = deadline - time.time()
-            if remaining <= 0:
-                break
-            try:
-                item = await asyncio.wait_for(request_queue.get(), timeout=remaining)
-                batch.append(item)
-            except asyncio.TimeoutError:
-                break
-
-        batch_size = len(batch)
-        prompts = [item.prompt for item in batch]
-        max_tokens = max(item.max_new_tokens for item in batch)
-
-        try:
-            batch_res = await async_process_batch(prompts, max_tokens)
-            for i, item in enumerate(batch):
-                gen_text = batch_res.generated_texts[i]
-                two_tier_cache.insert(
-                    prompt=item.prompt,
-                    max_new_tokens=item.max_new_tokens,
-                    response_text=gen_text,
-                    embedding=item.embedding,
-                    prompt_tokens=batch_res.prompt_tokens_list[i],
-                    generated_tokens=batch_res.generated_tokens_list[i],
-                    total_model_tokens=batch_res.total_model_tokens_list[i]
-                )
-                if not item.future.done():
-                    item.future.set_result({
-                        "generated_text": gen_text,
-                        "processing_time_sec": batch_res.processing_time_sec,
-                        "batch_size": batch_size,
-                        "prompt_tokens": batch_res.prompt_tokens_list[i],
-                        "padded_tokens": batch_res.padded_tokens_list[i],
-                        "generated_tokens": batch_res.generated_tokens_list[i],
-                        "total_model_tokens": batch_res.total_model_tokens_list[i]
-                    })
-        except Exception as e:
-            logger.error("Error processing batch: %s", e, exc_info=True)
-            for item in batch:
-                if not item.future.done():
-                    item.future.set_exception(e)
-        finally:
-            for _ in range(batch_size):
-                request_queue.task_done()
+    return {
+        "generated_text": gen_text,
+        "processing_time_sec": proc_time_sec,
+        "prompt_tokens": p_tok,
+        "generated_tokens": g_tok,
+        "total_model_tokens": t_tok
+    }
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     global http_client
     http_client = httpx.AsyncClient(timeout=30.0)
-    worker_task = asyncio.create_task(batch_worker())
     shutdown_task = None
 
     if AUTO_SHUTDOWN_SECONDS > 0:
@@ -336,15 +243,14 @@ async def lifespan(app: FastAPI):
     finally:
         if shutdown_task is not None:
             shutdown_task.cancel()
-        worker_task.cancel()
-        await asyncio.gather(worker_task, *([shutdown_task] if shutdown_task else []), return_exceptions=True)
+            await asyncio.gather(shutdown_task, return_exceptions=True)
         if http_client is not None:
             await http_client.aclose()
 
 
 app = FastAPI(
     title="LLM Inference Server - Two-Tier Cache Architecture",
-    description="Inference server with Tier 1 exact match cache, Tier 2 semantic embedding cache, and dynamic batching.",
+    description="Inference server with Tier 1 exact match cache and Tier 2 semantic embedding cache.",
     lifespan=lifespan
 )
 
@@ -355,26 +261,18 @@ class GenerateRequest(BaseModel):
     max_new_tokens: int = Field(default=20, ge=1, le=100)
 
 
-class BatchGenerateRequest(BaseModel):
-    prompts: list[str] = Field(..., description="List of prompt strings", min_length=1)
-    max_new_tokens: int = Field(default=20, ge=1, le=100)
-
-
 class GenerateResponse(BaseModel):
     request_id: str
     prompt: str
     generated_text: str
-    queue_wait_time_ms: float
     processing_time_ms: float
     total_latency_ms: float
-    batch_size: int
     cache_hit: bool
     match_type: str = Field(default="none", description="Match type: 'exact', 'semantic', or 'none'")
     similarity_score: Optional[float] = Field(default=None, description="Similarity score for semantic match")
     matched_prompt: Optional[str] = Field(default=None, description="Original prompt matched against")
     prompt_tokens: int
     generated_tokens: int
-    padded_tokens: int
     total_model_tokens: int
 
 
@@ -383,18 +281,14 @@ def _record_and_build_response(
     prompt: str,
     generated_text: str,
     arrival_time: float,
-    queue_wait_ms: float,
     proc_time_ms: float,
-    batch_size: int,
     cache_hit: bool,
     match_type: str,
     similarity_score: Optional[float],
     matched_prompt: Optional[str],
     prompt_tokens: int,
     generated_tokens: int,
-    padded_tokens: int,
     total_model_tokens: int,
-    enable_batching: bool,
     enable_cache: bool,
     enable_semantic_cache: bool,
     similarity_threshold: float
@@ -405,17 +299,14 @@ def _record_and_build_response(
         request_id=request_id,
         prompt=prompt,
         generated_text=generated_text,
-        queue_wait_time_ms=round(max(queue_wait_ms, 0.0), 2),
         processing_time_ms=round(proc_time_ms, 2),
         total_latency_ms=round(total_latency_ms, 2),
-        batch_size=batch_size,
         cache_hit=cache_hit,
         match_type=match_type,
         similarity_score=similarity_score,
         matched_prompt=matched_prompt,
         prompt_tokens=prompt_tokens,
         generated_tokens=generated_tokens,
-        padded_tokens=padded_tokens,
         total_model_tokens=total_model_tokens
     )
 
@@ -426,19 +317,15 @@ def _record_and_build_response(
         "generated_text": generated_text,
         "prompt_char_len": len(prompt.strip()),
         "max_new_tokens": total_model_tokens,
-        "queue_time_ms": round(max(queue_wait_ms, 0.0), 2),
         "processing_time_ms": round(proc_time_ms, 2),
         "total_latency_ms": round(total_latency_ms, 2),
-        "batch_size": batch_size,
         "cache_hit": cache_hit,
         "match_type": match_type,
         "similarity_score": similarity_score,
         "matched_prompt": matched_prompt,
         "prompt_tokens": prompt_tokens,
         "generated_tokens": generated_tokens,
-        "padded_tokens": padded_tokens,
         "total_model_tokens": total_model_tokens,
-        "batching_enabled": enable_batching,
         "cache_enabled": enable_cache,
         "semantic_cache_enabled": enable_semantic_cache,
         "similarity_threshold": similarity_threshold
@@ -458,7 +345,7 @@ def playground():
 def status_api():
     return {
         "status": "ok",
-        "stage": "Stage E: Two-Tier Cache Architecture (Tier 1 Exact + Tier 2 Semantic)",
+        "stage": "Two-Tier Cache Architecture (Tier 1 Exact + Tier 2 Semantic)",
         "generative_model": GROQ_MODEL_NAME,
         "log_file": LOG_FILE_PATH,
         "cache_entries": len(two_tier_cache.entries),
@@ -563,33 +450,9 @@ def clear_cache(prompt: Optional[str] = Query(default=None, description="Specifi
     }
 
 
-@app.post("/generate_batch", response_model=list[GenerateResponse])
-async def generate_batch(
-    request: BatchGenerateRequest,
-    enable_batching: bool = Query(default=True),
-    enable_cache: bool = Query(default=True),
-    enable_semantic_cache: bool = Query(default=True),
-    similarity_threshold: float = Query(default=0.90, ge=0.50, le=1.00),
-    cache_ttl: float = Query(default=DEFAULT_CACHE_TTL_SECONDS, ge=1.0)
-):
-    tasks = [
-        generate(
-            GenerateRequest(prompt=p, max_new_tokens=request.max_new_tokens),
-            enable_batching=enable_batching,
-            enable_cache=enable_cache,
-            enable_semantic_cache=enable_semantic_cache,
-            similarity_threshold=similarity_threshold,
-            cache_ttl=cache_ttl
-        )
-        for p in request.prompts
-    ]
-    return await asyncio.gather(*tasks)
-
-
 @app.post("/generate", response_model=GenerateResponse)
 async def generate(
     request: GenerateRequest,
-    enable_batching: bool = Query(default=True),
     enable_cache: bool = Query(default=True),
     enable_semantic_cache: bool = Query(default=True),
     similarity_threshold: float = Query(default=0.90, ge=0.50, le=1.00),
@@ -611,18 +474,14 @@ async def generate(
                 prompt=request.prompt,
                 generated_text=exact_entry.response_text,
                 arrival_time=arrival_time,
-                queue_wait_ms=0.0,
                 proc_time_ms=0.0,
-                batch_size=0,
                 cache_hit=True,
                 match_type="exact",
                 similarity_score=1.0,
                 matched_prompt=exact_entry.prompt,
                 prompt_tokens=exact_entry.prompt_tokens,
                 generated_tokens=exact_entry.generated_tokens,
-                padded_tokens=0,
                 total_model_tokens=0,
-                enable_batching=enable_batching,
                 enable_cache=enable_cache,
                 enable_semantic_cache=enable_semantic_cache,
                 similarity_threshold=similarity_threshold
@@ -648,18 +507,14 @@ async def generate(
                         prompt=request.prompt,
                         generated_text=sem_entry.response_text,
                         arrival_time=arrival_time,
-                        queue_wait_ms=0.0,
                         proc_time_ms=0.0,
-                        batch_size=0,
                         cache_hit=True,
                         match_type="semantic",
                         similarity_score=sim_score,
                         matched_prompt=sem_entry.prompt,
                         prompt_tokens=sem_entry.prompt_tokens,
                         generated_tokens=sem_entry.generated_tokens,
-                        padded_tokens=0,
                         total_model_tokens=0,
-                        enable_batching=enable_batching,
                         enable_cache=enable_cache,
                         enable_semantic_cache=enable_semantic_cache,
                         similarity_threshold=similarity_threshold
@@ -668,83 +523,38 @@ async def generate(
             logger.warning("Semantic match lookup failed for '%s': %s", clean_prompt, e)
 
     # Full Cache Miss - Model Inference
-    if not enable_batching:
-        start_proc = time.time()
-        single_res = await async_process_batch([clean_prompt], request.max_new_tokens)
-        proc_time_ms = (time.time() - start_proc) * 1000.0
-        gen_text = single_res.generated_texts[0]
-
-        if enable_cache:
-            two_tier_cache.insert(
-                prompt=clean_prompt,
-                max_new_tokens=request.max_new_tokens,
-                response_text=gen_text,
-                embedding=prompt_emb,
-                prompt_tokens=single_res.prompt_tokens_list[0],
-                generated_tokens=single_res.generated_tokens_list[0],
-                total_model_tokens=single_res.total_model_tokens_list[0]
-            )
-
-        return _record_and_build_response(
-            request_id=request_id,
-            prompt=request.prompt,
-            generated_text=gen_text,
-            arrival_time=arrival_time,
-            queue_wait_ms=0.0,
-            proc_time_ms=proc_time_ms,
-            batch_size=1,
-            cache_hit=False,
-            match_type="none",
-            similarity_score=None,
-            matched_prompt=None,
-            prompt_tokens=single_res.prompt_tokens_list[0],
-            generated_tokens=single_res.generated_tokens_list[0],
-            padded_tokens=0,
-            total_model_tokens=single_res.total_model_tokens_list[0],
-            enable_batching=False,
-            enable_cache=enable_cache,
-            enable_semantic_cache=enable_semantic_cache,
-            similarity_threshold=similarity_threshold
-        )
-
-    # Dynamic Batching
-    future = loop.create_future()
-    item = RequestItem(
-        request_id=request_id,
-        prompt=clean_prompt,
-        max_new_tokens=request.max_new_tokens,
-        future=future,
-        arrival_time=arrival_time,
-        embedding=prompt_emb
-    )
-    await request_queue.put(item)
-
     try:
-        res_data = await future
+        proc_res = await async_process_prompt(clean_prompt, request.max_new_tokens)
     except Exception as err:
         raise HTTPException(status_code=500, detail=f"Model execution error: {err}")
 
-    total_latency_ms = (time.time() - arrival_time) * 1000.0
-    proc_time_ms = res_data["processing_time_sec"] * 1000.0
-    queue_wait_ms = total_latency_ms - proc_time_ms
+    gen_text = proc_res["generated_text"]
+    proc_time_ms = proc_res["processing_time_sec"] * 1000.0
+
+    if enable_cache:
+        two_tier_cache.insert(
+            prompt=clean_prompt,
+            max_new_tokens=request.max_new_tokens,
+            response_text=gen_text,
+            embedding=prompt_emb,
+            prompt_tokens=proc_res["prompt_tokens"],
+            generated_tokens=proc_res["generated_tokens"],
+            total_model_tokens=proc_res["total_model_tokens"]
+        )
 
     return _record_and_build_response(
         request_id=request_id,
         prompt=request.prompt,
-        generated_text=res_data["generated_text"],
+        generated_text=gen_text,
         arrival_time=arrival_time,
-        queue_wait_ms=queue_wait_ms,
         proc_time_ms=proc_time_ms,
-        batch_size=res_data["batch_size"],
         cache_hit=False,
         match_type="none",
         similarity_score=None,
         matched_prompt=None,
-        prompt_tokens=res_data["prompt_tokens"],
-        generated_tokens=res_data["generated_tokens"],
-        padded_tokens=res_data["padded_tokens"],
-        total_model_tokens=res_data["total_model_tokens"],
-        enable_batching=True,
+        prompt_tokens=proc_res["prompt_tokens"],
+        generated_tokens=proc_res["generated_tokens"],
+        total_model_tokens=proc_res["total_model_tokens"],
         enable_cache=enable_cache,
         enable_semantic_cache=enable_semantic_cache,
         similarity_threshold=similarity_threshold

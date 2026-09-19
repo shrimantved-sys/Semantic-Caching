@@ -1,0 +1,1143 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+  <meta charset="utf-8">
+  <meta content="width=device-width, initial-scale=1.0" name="viewport">
+  <title>Two-Tier LLM Cache Showcase - Groq Engine (Qwen 2.5 27B)</title>
+  <script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+  <link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&display=swap"
+    rel="stylesheet">
+  <link href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <script id="tailwind-config">
+    tailwind.config = {
+      darkMode: "class",
+      theme: {
+        extend: {
+          "colors": {
+            "surface": "#fcf9f8",
+            "surface-container-highest": "#e5e2e1",
+            "secondary-fixed-dim": "#bdcbaf",
+            "sage-accent": "#7C8A71",
+            "on-tertiary": "#ffffff",
+            "charcoal-text": "#1A1A1A",
+            "surface-container-lowest": "#ffffff",
+            "error": "#ba1a1a",
+            "tertiary": "#8e4c41",
+            "secondary-fixed": "#d8e7ca",
+            "on-secondary-container": "#5b6851",
+            "outline": "#787770",
+            "surface-container-low": "#f6f3f2",
+            "on-tertiary-fixed": "#390b05",
+            "tertiary-container": "#ffefec",
+            "surface-tint": "#5f5e5b",
+            "tertiary-fixed": "#ffdad4",
+            "tertiary-fixed-dim": "#ffb4a7",
+            "surface-variant": "#e5e2e1",
+            "on-tertiary-fixed-variant": "#71352b",
+            "on-surface": "#1c1b1b",
+            "surface-container-high": "#eae7e7",
+            "on-primary-fixed": "#1c1c19",
+            "on-error-container": "#93000a",
+            "on-background": "#1c1b1b",
+            "background": "#fcf9f8",
+            "on-error": "#ffffff",
+            "on-secondary-fixed-variant": "#3e4a35",
+            "primary-fixed-dim": "#c9c6c2",
+            "inverse-primary": "#c9c6c2",
+            "inverse-on-surface": "#f3f0ef",
+            "terracotta-accent": "#B36A5E",
+            "surface-container": "#f0eded",
+            "surface-bright": "#fcf9f8",
+            "primary": "#5f5e5b",
+            "on-primary-container": "#6f6e6a",
+            "primary-fixed": "#e5e2dd",
+            "on-tertiary-container": "#a15b50",
+            "muted-stone": "#D1CDC7",
+            "on-primary-fixed-variant": "#474743",
+            "on-primary": "#ffffff",
+            "primary-container": "#f5f2ed",
+            "on-secondary": "#ffffff",
+            "inverse-surface": "#313030",
+            "secondary-container": "#d8e7ca",
+            "outline-variant": "#c8c7be",
+            "on-surface-variant": "#474741",
+            "surface-dim": "#dcd9d9",
+            "secondary": "#55624c",
+            "on-secondary-fixed": "#131f0d",
+            "cream-base": "#FDFCFB",
+            "error-container": "#ffdad6",
+            "warm-beige": "#F5F2ED"
+          },
+          "borderRadius": {
+            "DEFAULT": "0.25rem",
+            "lg": "0.5rem",
+            "xl": "0.75rem",
+            "2xl": "1rem",
+            "3xl": "1.5rem",
+            "full": "9999px"
+          },
+          "fontFamily": {
+            "body-lg": ["Geist"],
+            "body-md": ["Geist"],
+            "display-lg": ["Geist"],
+            "label-md": ["Geist"],
+            "headline-lg-mobile": ["Geist"],
+            "label-sm": ["Geist"],
+            "headline-md": ["Geist"],
+            "headline-lg": ["Geist"],
+            "code-md": ["Geist"]
+          }
+        }
+      }
+    }
+  </script>
+  <style>
+    body {
+      -webkit-font-smoothing: antialiased;
+    }
+
+    .glass-panel {
+      background-color: rgba(246, 243, 242, 0.85);
+      backdrop-filter: blur(16px);
+      -webkit-backdrop-filter: blur(16px);
+      border: 1px solid rgba(120, 119, 112, 0.15);
+      box-shadow: 0 8px 32px -4px rgba(0, 0, 0, 0.05);
+    }
+
+    .glow-hover:hover {
+      box-shadow: 0 4px 20px rgba(179, 106, 94, 0.25);
+    }
+
+    .hide-scrollbar::-webkit-scrollbar {
+      display: none;
+    }
+
+    .hide-scrollbar {
+      -ms-overflow-style: none;
+      scrollbar-width: none;
+    }
+
+    .glow-primary {
+      box-shadow: 0 4px 14px rgba(124, 138, 113, 0.2);
+    }
+
+    .glow-secondary {
+      box-shadow: 0 4px 14px rgba(179, 106, 94, 0.2);
+    }
+
+    .view-section {
+      display: none;
+    }
+
+    .view-section.active {
+      display: flex;
+      flex-direction: column;
+    }
+  </style>
+</head>
+
+<body class="bg-background text-on-surface font-body-md flex flex-col min-h-screen pb-20 md:pb-0">
+
+  <!-- Top Mobile App Bar -->
+  <header
+    class="bg-surface/90 backdrop-blur-md flex justify-between items-center px-4 py-3 sticky top-0 z-50 w-full border-b border-outline-variant/50 transition-all duration-300 md:hidden relative">
+    <div class="flex-1 flex justify-start">
+      <div
+        class="w-10 h-10 rounded-lg bg-surface-container flex items-center justify-center text-charcoal-text border border-outline-variant">
+        <span class="material-symbols-outlined">bolt</span>
+      </div>
+    </div>
+    <h1
+      class="font-headline-lg-mobile text-headline-lg-mobile font-bold bg-gradient-to-r from-terracotta-accent to-sage-accent bg-clip-text text-transparent absolute left-1/2 -translate-x-1/2">
+      Bolt</h1>
+    <div class="flex-1 flex justify-end">
+      <button onclick="switchView('dashboard')"
+        class="text-on-surface hover:opacity-80 p-2 rounded-full hover:bg-surface-container transition-colors">
+        <span class="material-symbols-outlined">settings</span>
+      </button>
+    </div>
+  </header>
+
+  <!-- Main Wrapper with Desktop Sidebar -->
+  <div class="flex flex-1 overflow-hidden h-full">
+    <!-- Desktop Sidebar Navigation -->
+    <aside
+      class="hidden md:flex flex-col bg-surface/95 backdrop-blur-2xl border-r border-outline-variant/50 shadow-sm shadow-black/5 vertical left-0 h-full w-72 fixed left-0 top-0 z-[60] py-6 gap-2">
+      <div class="px-6 pb-4 mb-4 border-b border-outline-variant/30">
+        <h2 class="font-headline-md text-headline-md text-charcoal-text flex items-center gap-3">
+          <div
+            class="w-8 h-8 rounded-lg bg-surface-container-high flex items-center justify-center text-charcoal-text border border-outline-variant">
+            <span class="material-symbols-outlined text-sm">bolt</span>
+          </div>
+          Bolt AI
+        </h2>
+      </div>
+      <nav class="flex-1 flex flex-col gap-1 px-4">
+        <button id="nav-btn-dashboard" onclick="switchView('dashboard')"
+          class="w-full text-left px-4 py-3 rounded-xl flex items-center gap-3 font-body-md text-body-md transition-colors text-on-surface-variant hover:bg-surface-container">
+          <span class="material-symbols-outlined">dashboard</span>
+          Dashboard & Cache Inspector
+        </button>
+        <button id="nav-btn-playground" onclick="switchView('playground')"
+          class="w-full text-left px-4 py-3 rounded-xl flex items-center gap-3 font-body-md text-body-md transition-colors bg-secondary-container text-on-secondary-container font-semibold">
+          <span class="material-symbols-outlined">terminal</span>
+          Live Playground
+        </button>
+      </nav>
+    </aside>
+
+    <!-- Main Content Area -->
+    <main class="flex-1 md:ml-72 p-4 md:p-6 lg:p-8 overflow-y-auto pb-24 md:pb-8 w-full max-w-container-max mx-auto">
+
+      <!-- VIEW 1: PLAYGROUND (Single Prompt & Batch Prompts) -->
+      <div id="view-playground" class="view-section active w-full">
+        <div class="flex justify-between items-center mb-6">
+          <div>
+            <h1 class="font-headline-lg text-headline-lg text-charcoal-text font-bold">Two-Tier Cache Playground</h1>
+            <p class="font-body-md text-body-md text-on-surface-variant">Tier 1: Instant Exact Match | Tier 2: Semantic
+              Embedding Match with Cosine Similarity</p>
+          </div>
+          <span id="cache-entries-pill"
+            class="hidden sm:inline-flex items-center gap-2 bg-surface-container px-3.5 py-1.5 rounded-full border border-outline-variant/50 font-label-md text-label-sm text-charcoal-text">
+            Cache Entries: 0
+          </span>
+        </div>
+
+        <div class="flex flex-col gap-sm md:gap-lg md:grid md:grid-cols-2">
+          <!-- Input Section -->
+          <section class="glass-panel rounded-3xl p-5 flex flex-col gap-5">
+            <!-- Playground Header Banner -->
+            <div class="flex items-center justify-between p-3 bg-surface-container rounded-2xl border border-outline-variant/20">
+              <span class="font-headline-md text-xs font-bold text-charcoal-text flex items-center gap-1.5">
+                <span class="material-symbols-outlined text-[16px] text-sage-accent">terminal</span> Interactive Prompt Runner
+              </span>
+              <span class="font-label-md text-[11px] text-on-surface-variant font-medium bg-surface-container-lowest px-2.5 py-0.5 rounded-full border border-outline-variant/30">Two-Tier Cache Active</span>
+            </div>
+
+            <!-- Input Area -->
+            <div class="flex flex-col gap-2">
+              <label id="input-label"
+                class="font-label-md text-label-md text-on-surface-variant uppercase tracking-wider"
+                for="prompt-input">Input Prompt</label>
+              <textarea id="prompt-input"
+                class="w-full bg-surface-container-lowest border border-outline-variant/40 rounded-2xl p-4 font-code-md text-code-md text-on-surface focus:border-sage-accent focus:ring-1 focus:ring-sage-accent focus:outline-none transition-colors"
+                placeholder="Enter your prompt... e.g. What is the boiling point of water at sea level?"
+                rows="4"></textarea>
+
+              <!-- Quick Test Paraphrases -->
+              <div id="chips-container" class="flex flex-wrap gap-2 mt-2">
+                <span onclick="setPrompt('What is the boiling point of water at sea level?')"
+                  class="bg-secondary-fixed text-on-secondary-container border border-secondary-fixed-dim px-3 py-1 rounded-full font-label-md text-[11px] cursor-pointer hover:bg-secondary-container transition-colors">Original:
+                  Water Boiling Point</span>
+                <span onclick="setPrompt('At what temperature does water boil at sea level?')"
+                  class="bg-tertiary-container text-tertiary border border-tertiary-fixed-dim px-3 py-1 rounded-full font-label-md text-[11px] cursor-pointer hover:bg-tertiary-fixed transition-colors">Paraphrase
+                  (Tier 2 Test)</span>
+                <span onclick="setPrompt('Who wrote Romeo and Juliet?')"
+                  class="bg-surface-container text-on-surface-variant border border-outline-variant/30 px-3 py-1 rounded-full font-label-md text-[11px] cursor-pointer hover:bg-surface-container-high transition-colors">Different
+                  (Miss Test)</span>
+              </div>
+            </div>
+
+            <!-- Settings -->
+            <div class="flex flex-col gap-4 mt-2">
+              <!-- Max Tokens Slider -->
+              <div>
+                <div class="flex justify-between items-center mb-2">
+                  <label class="font-label-md text-label-md text-on-surface-variant" for="max-tokens">Max Tokens: <span
+                      class="text-charcoal-text font-semibold" id="token-val">20</span></label>
+                </div>
+                <input id="max-tokens"
+                  class="w-full h-2.5 bg-surface-container-highest rounded-full appearance-none cursor-pointer accent-terracotta-accent"
+                  max="100" min="1" type="range" value="20"
+                  oninput="document.getElementById('token-val').textContent = this.value">
+              </div>
+
+              <!-- Cache & Inference Options -->
+              <div>
+                <h3 class="font-label-md text-label-md text-on-surface-variant uppercase tracking-wider mb-2">Two-Tier
+                  Cache & Inference Options</h3>
+                <div class="flex flex-col gap-2.5">
+
+                  <label
+                    class="flex justify-between items-center p-3 bg-surface-container-lowest rounded-2xl border border-outline-variant/30 cursor-pointer hover:border-outline-variant/50 transition-colors">
+                    <div>
+                      <span class="font-body-md text-body-md text-on-surface font-medium">Tier 1: Exact Match
+                        Cache</span>
+                      <span class="font-label-md text-[11px] text-on-surface-variant block mt-0.5">Checked first, zero
+                        inference overhead</span>
+                    </div>
+                    <div class="relative">
+                      <input id="toggle-cache" checked="" class="sr-only peer" type="checkbox">
+                      <div
+                        class="w-11 h-6 bg-surface-container-highest peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-sage-accent">
+                      </div>
+                    </div>
+                  </label>
+                  <label
+                    class="flex justify-between items-center p-3 bg-surface-container-lowest rounded-2xl border border-terracotta-accent/30 cursor-pointer hover:border-terracotta-accent/60 transition-colors">
+                    <div>
+                      <span class="font-body-md text-body-md text-on-surface flex items-center gap-1.5 font-medium">
+                        Tier 2: Semantic Cache <span
+                          class="bg-tertiary-container text-tertiary text-[10px] px-2 py-0.5 rounded-full font-bold uppercase">Cosine
+                          Match</span>
+                      </span>
+                      <span class="font-label-md text-[11px] text-on-surface-variant block mt-0.5">Runs on Tier 1 miss
+                        using stored embeddings</span>
+                    </div>
+                    <div class="relative">
+                      <input id="toggle-semantic" checked="" class="sr-only peer" type="checkbox"
+                        onchange="document.getElementById('sim-thresh-container').style.display = this.checked ? 'block' : 'none'">
+                      <div
+                        class="w-11 h-6 bg-surface-container-highest peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-terracotta-accent">
+                      </div>
+                    </div>
+                  </label>
+                  <div id="sim-thresh-container"
+                    class="p-3 bg-tertiary-container/20 rounded-2xl border border-terracotta-accent/20">
+                    <div class="flex justify-between items-center mb-1.5">
+                      <span class="font-label-md text-[12px] text-on-surface-variant font-medium">Similarity Threshold:
+                        <strong id="thresh-val" class="text-tertiary font-mono">0.90</strong></span>
+                      <span class="text-[10px] text-on-surface-variant uppercase font-semibold">(Configurable)</span>
+                    </div>
+                    <input id="sim-threshold" type="range" min="0.70" max="0.99" step="0.01" value="0.90"
+                      class="w-full h-2 bg-surface-container-highest rounded-full appearance-none cursor-pointer accent-terracotta-accent"
+                      oninput="document.getElementById('thresh-val').innerText = parseFloat(this.value).toFixed(2)">
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <!-- CTA -->
+            <button id="btn-generate" onclick="runGeneration()"
+              class="w-full mt-2 py-3.5 px-6 rounded-full bg-charcoal-text text-white font-headline-md text-[16px] font-bold glow-hover transition-all active:scale-95 hover:bg-terracotta-accent flex items-center justify-center gap-2">
+              <span id="btn-text">Generate Output</span>
+            </button>
+          </section>
+
+          <!-- Output Section -->
+          <section class="flex flex-col gap-sm">
+            <!-- Output Box -->
+            <div class="glass-panel rounded-3xl p-5 flex flex-col gap-4 min-h-[250px]">
+              <div class="flex justify-between items-center">
+                <div class="flex items-center gap-2.5">
+                  <h2 class="font-headline-md text-[18px] font-semibold text-charcoal-text">Generated Completion</h2>
+                  <button id="output-req-badge" onclick="inspectCurrentOutputRequest()" style="display: none;"
+                    class="font-mono text-xs px-2.5 py-1 rounded-full bg-surface-container hover:bg-surface-container-high text-charcoal-text hover:text-terracotta-accent border border-outline-variant/40 flex items-center gap-1 transition-colors cursor-pointer"
+                    title="Click to inspect this request in detail">
+                    <span class="material-symbols-outlined text-[12px] text-sage-accent">tag</span>
+                    <span id="output-req-id">req-00000000</span>
+                    <span class="material-symbols-outlined text-[13px] opacity-50">visibility</span>
+                  </button>
+                </div>
+                <span id="cache-badge"
+                  class="bg-surface-container-highest text-on-surface-variant border border-outline-variant px-2.5 py-1 rounded-full font-label-md text-[10px] uppercase tracking-wider font-semibold">Ready</span>
+              </div>
+
+              <!-- Transparency Banner -->
+              <div id="transparency-banner" style="display: none;" class="p-3 rounded-2xl border text-xs font-medium">
+                <div class="flex items-center gap-1.5 font-semibold mb-1" id="transparency-title"></div>
+                <div class="text-on-surface-variant font-mono" id="transparency-details"></div>
+              </div>
+
+              <div
+                class="flex-1 bg-surface-container-lowest border border-outline-variant/30 rounded-2xl p-4 relative group">
+                <button onclick="copyOutput()"
+                  class="absolute top-3 right-3 bg-surface-container text-on-surface-variant hover:text-charcoal-text px-2.5 py-1.5 rounded-lg font-label-md text-[11px] opacity-20 group-hover:opacity-100 transition-opacity flex items-center gap-1 border border-outline-variant/30">
+                  <span aria-hidden="true" class="material-symbols-outlined text-[14px]">content_copy</span> Copy
+                </button>
+                <p id="output-text"
+                  class="font-code-md text-code-md text-on-surface leading-relaxed whitespace-pre-wrap">Submit a prompt
+                  to view live model generation and Two-Tier Cache transparency details...</p>
+              </div>
+            </div>
+
+            <!-- Stats Grid -->
+            <div class="flex gap-3 overflow-x-auto pb-2 hide-scrollbar snap-x">
+              <div
+                class="snap-start shrink-0 w-32 bg-surface-container-lowest border border-outline-variant/20 rounded-2xl p-4 flex flex-col items-center justify-center text-center shadow-sm">
+                <span id="stat-latency"
+                  class="font-headline-lg text-headline-lg-mobile font-bold text-charcoal-text">0<span
+                    class="text-sm font-normal text-on-surface-variant ml-0.5">ms</span></span>
+                <span class="font-label-md text-[11px] text-on-surface-variant uppercase tracking-wider mt-1.5">Total
+                  Latency</span>
+              </div>
+              <div
+                class="snap-start shrink-0 w-32 bg-surface-container-lowest border border-outline-variant/20 rounded-2xl p-4 flex flex-col items-center justify-center text-center shadow-sm">
+                <span id="stat-compute"
+                  class="font-headline-lg text-headline-lg-mobile font-bold text-charcoal-text">0<span
+                    class="text-sm font-normal text-on-surface-variant ml-0.5">ms</span></span>
+                <span class="font-label-md text-[11px] text-on-surface-variant uppercase tracking-wider mt-1.5">Model
+                  Compute</span>
+              </div>
+
+              <div
+                class="snap-start shrink-0 w-24 bg-surface-container-lowest border border-outline-variant/20 rounded-2xl p-4 flex flex-col items-center justify-center text-center shadow-sm">
+                <span id="stat-prompt-toks"
+                  class="font-headline-lg text-headline-lg-mobile font-bold text-charcoal-text">0</span>
+                <span
+                  class="font-label-md text-[11px] text-on-surface-variant uppercase tracking-wider mt-1.5">Prompt</span>
+              </div>
+              <div
+                class="snap-start shrink-0 w-24 bg-surface-container-lowest border border-outline-variant/20 rounded-2xl p-4 flex flex-col items-center justify-center text-center shadow-sm">
+                <span id="stat-gen-toks"
+                  class="font-headline-lg text-headline-lg-mobile font-bold text-charcoal-text">0</span>
+                <span
+                  class="font-label-md text-[11px] text-on-surface-variant uppercase tracking-wider mt-1.5">Gen</span>
+              </div>
+            </div>
+          </section>
+        </div>
+      </div>
+
+      <!-- VIEW 2: HOME DASHBOARD / TELEMETRY & CACHE INSPECTOR -->
+      <div id="view-dashboard" class="view-section w-full">
+        <div class="hidden md:flex justify-between items-end mb-8 border-b border-outline-variant/30 pb-4">
+          <div>
+            <h1 class="font-display-lg text-display-lg text-charcoal-text mb-2">Cache Inspector & Dashboard</h1>
+            <p class="font-body-md text-body-md text-on-surface-variant">Real-time telemetry, cached prompt inspection,
+              and eviction controls.
+            </p>
+          </div>
+          <div class="flex items-center gap-4">
+            <button onclick="clearCacheAction()"
+              class="bg-surface-container hover:bg-surface-container-high px-4 py-2 rounded-full border border-outline-variant/50 font-label-md text-label-md text-charcoal-text transition-colors">
+              Clear Entire Cache
+            </button>
+            <div
+              class="flex items-center gap-2 bg-surface-container px-4 py-2 rounded-full border border-outline-variant/50">
+              <div class="w-2.5 h-2.5 rounded-full bg-sage-accent animate-pulse"></div>
+              <span class="font-label-md text-label-md text-charcoal-text uppercase tracking-wider">System Online</span>
+            </div>
+          </div>
+        </div>
+
+        <div class="grid grid-cols-1 lg:grid-cols-12 gap-6 lg:gap-8">
+          <!-- Left Column: Status & Cache Entries List -->
+          <div class="lg:col-span-5 flex flex-col gap-6">
+            <!-- System Status Card -->
+            <div class="glass-panel rounded-xl p-6 relative overflow-hidden group">
+              <div class="flex justify-between items-start mb-6">
+                <h3 class="font-headline-md text-headline-md text-charcoal-text">System Status</h3>
+                <span class="material-symbols-outlined text-outline">dns</span>
+              </div>
+              <div class="space-y-6">
+                <div>
+                  <div class="flex justify-between mb-2">
+                    <span class="font-label-md text-label-md text-on-surface-variant">TWO-TIER CACHE STORE</span>
+                    <span id="dash-cache-val" class="font-label-md text-label-md text-terracotta-accent font-semibold">0
+                      Entries</span>
+                  </div>
+                  <div
+                    class="w-full bg-surface-container h-2.5 rounded-full overflow-hidden border border-outline-variant/20">
+                    <div id="dash-cache-bar" class="h-full bg-terracotta-accent w-[10%] rounded-full"></div>
+                  </div>
+                </div>
+                <div class="bg-surface-container-low rounded-lg p-4 border border-outline-variant mt-4">
+                  <span class="font-label-md text-label-md text-on-surface-variant block mb-1">ACTIVE RUNTIME</span>
+                  <div class="flex items-center gap-3">
+                    <div
+                      class="w-10 h-10 rounded bg-secondary-container flex items-center justify-center text-on-secondary-container">
+                      <span class="material-symbols-outlined text-lg">cloud_done</span>
+                    </div>
+                    <div>
+                      <div id="runtime-model-name" class="font-body-md text-body-md font-semibold text-charcoal-text">
+                        Qwen 2.5 27B (Groq)</div>
+                      <div class="font-label-md text-label-md text-outline">Tier 1: Exact Match • Tier 2: Semantic Match
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <!-- Live Cache Entries Table -->
+            <div class="glass-panel rounded-xl p-6 flex flex-col gap-4">
+              <div class="flex justify-between items-center">
+                <h3 class="font-headline-md text-[18px] text-charcoal-text flex items-center gap-2">
+                  <span class="material-symbols-outlined text-outline">database</span>
+                  Active Cache Entries
+                </h3>
+                <button onclick="loadCacheEntries()" class="text-sage-accent text-xs font-semibold hover:underline">
+                  Refresh
+                </button>
+              </div>
+              <div class="max-h-80 overflow-y-auto">
+                <table class="w-full text-left text-xs border-collapse">
+                  <thead class="bg-surface-container-low sticky top-0">
+                    <tr>
+                      <th class="p-2 border-b border-outline-variant font-medium">Cached Prompt</th>
+                      <th class="p-2 border-b border-outline-variant font-medium">Age</th>
+                      <th class="p-2 border-b border-outline-variant text-right">Evict</th>
+                    </tr>
+                  </thead>
+                  <tbody id="cache-entries-body" class="divide-y divide-outline-variant/30">
+                    <tr>
+                      <td colspan="3" class="p-4 text-center text-outline">No cache entries stored yet.</td>
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          </div>
+
+          <!-- Right Column: Telemetry Logs -->
+          <div class="lg:col-span-7 flex flex-col gap-6">
+            <!-- Metrics Bento -->
+            <div class="grid grid-cols-1 sm:grid-cols-3 gap-4">
+              <div class="glass-panel p-6 rounded-xl relative overflow-hidden">
+                <span
+                  class="font-label-md text-label-md text-on-surface-variant block mb-2 uppercase tracking-wider">Avg
+                  Latency</span>
+                <div id="dash-avg-lat" class="font-display-lg text-display-lg text-charcoal-text">0ms</div>
+                <div class="absolute -bottom-4 -right-4 opacity-5 text-charcoal-text">
+                  <span class="material-symbols-outlined" style="font-size: 80px;">speed</span>
+                </div>
+              </div>
+              <div class="glass-panel p-6 rounded-xl relative overflow-hidden">
+                <span
+                  class="font-label-md text-label-md text-on-surface-variant block mb-2 uppercase tracking-wider">Tokens
+                  / Sec</span>
+                <div id="dash-tps" class="font-display-lg text-display-lg text-charcoal-text">0.0</div>
+                <div class="absolute -bottom-4 -right-4 opacity-5 text-charcoal-text">
+                  <span class="material-symbols-outlined" style="font-size: 80px;">bolt</span>
+                </div>
+              </div>
+              <div class="glass-panel p-6 rounded-xl relative overflow-hidden">
+                <span
+                  class="font-label-md text-label-md text-on-surface-variant block mb-2 uppercase tracking-wider">Cache
+                  Hit Rate</span>
+                <div id="dash-hit-rate" class="font-display-lg text-display-lg text-charcoal-text">0%</div>
+                <div class="absolute -bottom-4 -right-4 opacity-5 text-charcoal-text">
+                  <span class="material-symbols-outlined" style="font-size: 80px;">database</span>
+                </div>
+              </div>
+            </div>
+
+            <!-- Recent Queries Feed -->
+            <div class="glass-panel rounded-xl flex-1 flex flex-col overflow-hidden">
+              <div
+                class="p-6 border-b border-outline-variant flex justify-between items-center bg-surface-container-lowest">
+                <h3 class="font-headline-md text-headline-md text-charcoal-text flex items-center gap-2">
+                  <span class="material-symbols-outlined text-outline">history</span>
+                  Recent Telemetry Logs
+                </h3>
+                <button onclick="loadDashboardData()"
+                  class="text-sage-accent font-label-md text-label-md hover:underline font-semibold flex items-center gap-1">
+                  <span class="material-symbols-outlined text-sm">refresh</span> Refresh
+                </button>
+              </div>
+              <div class="flex-1 overflow-y-auto p-0 max-h-96">
+                <table class="w-full text-left border-collapse">
+                  <thead class="bg-surface-container-low sticky top-0 z-10">
+                    <tr>
+                      <th
+                        class="p-4 font-label-md text-label-md text-on-surface-variant font-medium border-b border-outline-variant">
+                        Req ID</th>
+                      <th
+                        class="p-4 font-label-md text-label-md text-on-surface-variant font-medium border-b border-outline-variant">
+                        Latency</th>
+                      <th
+                        class="p-4 font-label-md text-label-md text-on-surface-variant font-medium border-b border-outline-variant">
+                        Tokens (P/G)</th>
+                      <th
+                        class="p-4 font-label-md text-label-md text-on-surface-variant font-medium border-b border-outline-variant text-right">
+                        Match Status</th>
+                    </tr>
+                  </thead>
+                  <tbody id="dash-table-body" class="font-label-md text-label-md divide-y divide-outline-variant/30">
+                    <tr>
+                      <td colspan="4" class="p-4 text-center text-outline">Loading telemetry...</td>
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </main>
+  </div>
+
+  <script>
+    let currentMode = 'single';
+
+    function switchView(viewName) {
+      document.querySelectorAll('.view-section').forEach(el => el.classList.remove('active'));
+      document.getElementById(`view-${viewName}`).classList.add('active');
+
+      const dashNav = document.getElementById('nav-btn-dashboard');
+      const playNav = document.getElementById('nav-btn-playground');
+
+      if (viewName === 'dashboard') {
+        dashNav?.classList.add('bg-secondary-container', 'text-on-secondary-container', 'font-semibold');
+        dashNav?.classList.remove('text-on-surface-variant');
+        playNav?.classList.remove('bg-secondary-container', 'text-on-secondary-container', 'font-semibold');
+        playNav?.classList.add('text-on-surface-variant');
+        loadDashboardData();
+        loadCacheEntries();
+      } else {
+        playNav?.classList.add('bg-secondary-container', 'text-on-secondary-container', 'font-semibold');
+        playNav?.classList.remove('text-on-surface-variant');
+        dashNav?.classList.remove('bg-secondary-container', 'text-on-secondary-container', 'font-semibold');
+        dashNav?.classList.add('text-on-surface-variant');
+      }
+    }
+
+
+
+    function setPrompt(text) {
+      document.getElementById('prompt-input').value = text;
+    }
+
+    async function fetchStatus() {
+      try {
+        const res = await fetch('/api/status');
+        const data = await res.json();
+        if (data.cache_entries !== undefined) {
+          document.getElementById('cache-entries-pill').innerText = `Cache Entries: ${data.cache_entries}`;
+          const dashVal = document.getElementById('dash-cache-val');
+          const dashBar = document.getElementById('dash-cache-bar');
+          if (dashVal) dashVal.innerText = `${data.cache_entries} Entries`;
+          if (dashBar) dashBar.style.width = `${Math.min(data.cache_entries * 20, 100)}%`;
+        }
+        if (data.generative_model) {
+          const modelEl = document.getElementById('runtime-model-name');
+          if (modelEl) modelEl.innerText = `${data.generative_model} (Groq)`;
+        }
+      } catch (e) { }
+    }
+    fetchStatus();
+
+    async function runGeneration() {
+      const rawInput = document.getElementById('prompt-input').value.trim();
+      if (!rawInput) { alert('Please enter prompt text!'); return; }
+
+      const maxTokens = parseInt(document.getElementById('max-tokens').value);
+      const enableCache = document.getElementById('toggle-cache').checked;
+      const enableSemantic = document.getElementById('toggle-semantic').checked;
+      const simThresh = parseFloat(document.getElementById('sim-threshold').value);
+      const btnText = document.getElementById('btn-text');
+
+      btnText.textContent = "Processing...";
+
+      try {
+        const url = `/generate?enable_cache=${enableCache}&enable_semantic_cache=${enableSemantic}&similarity_threshold=${simThresh}`;
+        const res = await fetch(url, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ prompt: rawInput, max_new_tokens: maxTokens })
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.detail || 'Execution error');
+
+        updateSingleUI(data);
+        fetchStatus();
+      } catch (err) {
+        alert('Error: ' + err.message);
+      } finally {
+        btnText.textContent = 'Generate Output';
+      }
+    }
+
+    function updateSingleUI(data) {
+      const outputEl = document.getElementById('output-text');
+      if (outputEl) outputEl.innerText = data.generated_text;
+
+      const statLat = document.getElementById('stat-latency');
+      if (statLat) statLat.innerHTML = `${data.total_latency_ms}<span class="text-sm font-normal text-on-surface-variant ml-0.5">ms</span>`;
+
+      const statCompute = document.getElementById('stat-compute');
+      if (statCompute) statCompute.innerHTML = `${data.processing_time_ms}<span class="text-sm font-normal text-on-surface-variant ml-0.5">ms</span>`;
+
+      const statPrompt = document.getElementById('stat-prompt-toks');
+      if (statPrompt) statPrompt.innerText = data.prompt_tokens;
+
+      const statGen = document.getElementById('stat-gen-toks');
+      if (statGen) statGen.innerText = data.generated_tokens;
+
+      const reqBadge = document.getElementById('output-req-badge');
+      if (reqBadge && data.request_id) {
+        document.getElementById('output-req-id').innerText = data.request_id;
+        reqBadge.dataset.reqId = data.request_id;
+        reqBadge.style.display = 'inline-flex';
+      }
+
+      const cacheBadge = document.getElementById('cache-badge');
+      const banner = document.getElementById('transparency-banner');
+      const title = document.getElementById('transparency-title');
+      const details = document.getElementById('transparency-details');
+
+      if (data.match_type === "exact") {
+        cacheBadge.className = "bg-secondary-container text-on-secondary-container border border-secondary-fixed-dim px-2.5 py-1 rounded-full font-label-md text-[10px] uppercase tracking-wider font-semibold";
+        cacheBadge.innerText = "Tier 1: Exact Hit (100%)";
+        banner.style.display = "block";
+        banner.className = "p-3 rounded-2xl border bg-secondary-container/30 border-secondary-fixed text-xs font-medium";
+        title.innerHTML = `<span class="material-symbols-outlined text-[16px] text-sage-accent">verified</span> Tier 1 Exact Match Hit`;
+        details.innerText = `Instant match against key: "${data.matched_prompt}" (No model inference required)`;
+      } else if (data.match_type === "semantic") {
+        cacheBadge.className = "bg-tertiary-container text-tertiary border border-tertiary-fixed-dim px-2.5 py-1 rounded-full font-label-md text-[10px] uppercase tracking-wider font-semibold";
+        cacheBadge.innerText = `Tier 2: Semantic Hit (${(data.similarity_score || 0).toFixed(2)})`;
+        banner.style.display = "block";
+        banner.className = "p-3 rounded-2xl border bg-tertiary-container/30 border-tertiary-fixed text-xs font-medium";
+        title.innerHTML = `<span class="material-symbols-outlined text-[16px] text-tertiary">hub</span> Tier 2 Semantic Cosine Match (Score: ${data.similarity_score})`;
+        details.innerText = `Matched cached prompt: "${data.matched_prompt}"`;
+      } else {
+        cacheBadge.className = "bg-surface-container-highest text-on-surface-variant border border-outline-variant px-2.5 py-1 rounded-full font-label-md text-[10px] uppercase tracking-wider font-semibold";
+        cacheBadge.innerText = "Cache Miss (Model Generated)";
+        banner.style.display = "none";
+      }
+    }
+
+    let cachedLogs = [];
+
+    async function loadDashboardData() {
+      try {
+        const [statusRes, logsRes] = await Promise.all([
+          fetch('/api/status'),
+          fetch('/api/logs')
+        ]);
+        const statusData = await statusRes.json();
+        const logsData = await logsRes.json();
+        cachedLogs = logsData;
+
+        fetchStatus();
+
+        if (logsData.length > 0) {
+          const avgLat = logsData.reduce((acc, r) => acc + (r.total_latency_ms || 0), 0) / logsData.length;
+          const totalGenToks = logsData.reduce((acc, r) => acc + (r.generated_tokens || 0), 0);
+          const totalSecs = logsData.reduce((acc, r) => acc + ((r.total_latency_ms || 0) / 1000), 0);
+          const tps = totalSecs > 0 ? (totalGenToks / totalSecs) : 0;
+          const cacheHits = logsData.filter(r => r.cache_hit).length;
+          const hitRate = (cacheHits / logsData.length) * 100;
+
+          document.getElementById('dash-avg-lat').innerText = `${avgLat.toFixed(0)}ms`;
+          document.getElementById('dash-tps').innerText = `${tps.toFixed(1)}`;
+          document.getElementById('dash-hit-rate').innerText = `${hitRate.toFixed(0)}%`;
+        }
+
+        const tbody = document.getElementById('dash-table-body');
+        if (logsData.length === 0) {
+          tbody.innerHTML = `<tr><td colspan="4" class="p-4 text-center text-outline">No telemetry logs recorded yet.</td></tr>`;
+          return;
+        }
+
+        tbody.innerHTML = '';
+        logsData.forEach(r => {
+          const tr = document.createElement('tr');
+          tr.className = "hover:bg-surface-container transition-colors group";
+
+          let statusBadge = '';
+          if (r.match_type === "exact") {
+            statusBadge = `
+              <span class="inline-flex items-center gap-1.5 py-1 px-3 rounded-full bg-surface-container-highest text-charcoal-text border border-outline-variant text-xs font-semibold">
+                <span class="material-symbols-outlined text-[12px]">database</span> TIER 1 EXACT
+              </span>
+            `;
+          } else if (r.match_type === "semantic") {
+            statusBadge = `
+              <span class="inline-flex items-center gap-1.5 py-1 px-3 rounded-full bg-tertiary-container text-tertiary border border-tertiary-fixed text-xs font-semibold">
+                <span class="material-symbols-outlined text-[12px]">hub</span> TIER 2 (${r.similarity_score})
+              </span>
+            `;
+          } else {
+            statusBadge = `
+              <span class="inline-flex items-center gap-1.5 py-1 px-3 rounded-full bg-secondary-container/40 text-on-secondary-container border border-secondary-fixed/50 text-xs font-semibold">
+                <div class="w-1.5 h-1.5 rounded-full bg-sage-accent"></div> 200 OK (MISS)
+              </span>
+            `;
+          }
+
+          tr.innerHTML = `
+            <td class="p-4">
+              <button onclick="inspectRequest('${r.request_id}')" title="Click to inspect this request in detail"
+                class="inline-flex items-center gap-1.5 font-mono text-xs font-semibold px-2.5 py-1.5 rounded-lg bg-surface-container-low hover:bg-surface-container-high text-charcoal-text hover:text-terracotta-accent border border-outline-variant/40 hover:border-terracotta-accent/50 transition-all cursor-pointer shadow-xs group/btn">
+                <span class="material-symbols-outlined text-[13px] text-sage-accent group-hover/btn:text-terracotta-accent transition-colors">tag</span>
+                <span>${r.request_id}</span>
+                <span class="material-symbols-outlined text-[13px] opacity-40 group-hover/btn:opacity-100 group-hover/btn:translate-x-0.5 transition-all">open_in_new</span>
+              </button>
+            </td>
+            <td class="p-4 text-on-surface-variant font-medium">${r.total_latency_ms}ms</td>
+            <td class="p-4 text-on-surface-variant font-mono text-xs">${r.prompt_tokens} / ${r.generated_tokens}</td>
+            <td class="p-4 text-right">${statusBadge}</td>
+          `;
+          tbody.appendChild(tr);
+        });
+      } catch (e) { console.error(e); }
+    }
+
+    async function loadCacheEntries() {
+      try {
+        const res = await fetch('/api/cache_entries');
+        const entries = await res.json();
+        const tbody = document.getElementById('cache-entries-body');
+
+        if (entries.length === 0) {
+          tbody.innerHTML = `<tr><td colspan="3" class="p-4 text-center text-outline">No cache entries stored yet.</td></tr>`;
+          return;
+        }
+
+        tbody.innerHTML = '';
+        entries.forEach(e => {
+          const tr = document.createElement('tr');
+          tr.className = "hover:bg-surface-container";
+          tr.innerHTML = `
+            <td class="p-2 font-mono text-[11px] text-on-surface">${e.prompt}</td>
+            <td class="p-2 text-outline text-[11px]">${e.age_seconds}s ago</td>
+            <td class="p-2 text-right">
+              <button onclick="evictPrompt('${encodeURIComponent(e.prompt)}')" class="text-tertiary hover:underline text-[11px] font-semibold">
+                Evict
+              </button>
+            </td>
+          `;
+          tbody.appendChild(tr);
+        });
+      } catch (e) { console.error(e); }
+    }
+
+    async function evictPrompt(encodedPrompt) {
+      try {
+        const prompt = decodeURIComponent(encodedPrompt);
+        await fetch(`/clear_cache?prompt=${encodeURIComponent(prompt)}`, { method: 'POST' });
+        loadCacheEntries();
+        fetchStatus();
+      } catch (e) { alert('Error evicting prompt'); }
+    }
+
+    async function clearCacheAction() {
+      try {
+        await fetch('/clear_cache', { method: 'POST' });
+        alert('Cache cleared successfully!');
+        fetchStatus();
+        loadDashboardData();
+        loadCacheEntries();
+      } catch (e) { alert('Error clearing cache'); }
+    }
+
+    function copyOutput() {
+      const text = document.getElementById('output-text').innerText;
+      navigator.clipboard.writeText(text).then(() => alert('Copied output to clipboard!'));
+    }
+
+    // ==========================================
+    // REQUEST INSPECTOR MODAL CONTROLLER
+    // ==========================================
+    let currentInspectedData = null;
+
+    function inspectCurrentOutputRequest() {
+      const badge = document.getElementById('output-req-badge');
+      if (badge && badge.dataset.reqId) {
+        inspectRequest(badge.dataset.reqId);
+      }
+    }
+
+    async function inspectRequest(reqId) {
+      if (!reqId) return;
+
+      // Check local cache first for instant opening
+      let data = cachedLogs.find(r => r.request_id === reqId);
+      if (data) {
+        populateModal(data);
+        openRequestModal();
+      }
+
+      // Fetch fresh / complete data from server
+      try {
+        const res = await fetch(`/api/request/${encodeURIComponent(reqId)}`);
+        if (res.ok) {
+          const freshData = await res.json();
+          populateModal(freshData);
+          if (!data) openRequestModal();
+        } else if (!data) {
+          alert(`Request '${reqId}' could not be found.`);
+        }
+      } catch (err) {
+        console.error("Error fetching request details:", err);
+      }
+    }
+
+    function openRequestModal() {
+      const modal = document.getElementById('request-modal');
+      modal.classList.remove('hidden');
+      modal.classList.add('flex');
+      document.body.style.overflow = 'hidden';
+    }
+
+    function closeRequestModal() {
+      const modal = document.getElementById('request-modal');
+      modal.classList.add('hidden');
+      modal.classList.remove('flex');
+      document.body.style.overflow = '';
+    }
+
+    function populateModal(data) {
+      currentInspectedData = data;
+
+      document.getElementById('modal-req-id').innerText = data.request_id || 'N/A';
+      document.getElementById('modal-timestamp').innerHTML = `
+        <span class="material-symbols-outlined text-[14px]">schedule</span> ${data.timestamp || 'N/A'}
+      `;
+
+      // Status Badge
+      const statusBadge = document.getElementById('modal-status-badge');
+      if (data.match_type === "exact") {
+        statusBadge.className = "inline-flex items-center gap-1.5 py-0.5 px-3 rounded-full bg-secondary-container text-on-secondary-container border border-secondary-fixed-dim text-xs font-semibold";
+        statusBadge.innerHTML = `<span class="material-symbols-outlined text-[13px]">database</span> TIER 1 EXACT MATCH`;
+      } else if (data.match_type === "semantic") {
+        statusBadge.className = "inline-flex items-center gap-1.5 py-0.5 px-3 rounded-full bg-tertiary-container text-tertiary border border-tertiary-fixed text-xs font-semibold";
+        statusBadge.innerHTML = `<span class="material-symbols-outlined text-[13px]">hub</span> TIER 2 SEMANTIC MATCH`;
+      } else {
+        statusBadge.className = "inline-flex items-center gap-1.5 py-0.5 px-3 rounded-full bg-surface-container-highest text-on-surface-variant border border-outline-variant text-xs font-semibold";
+        statusBadge.innerHTML = `<span class="material-symbols-outlined text-[13px]">bolt</span> MODEL GENERATED (MISS)`;
+      }
+
+      // Prompt
+      const promptEl = document.getElementById('modal-prompt');
+      promptEl.innerText = data.prompt || data.matched_prompt || `(Prompt length: ${data.prompt_char_len || 0} characters)`;
+
+      // Cache Match Banner
+      const cacheBanner = document.getElementById('modal-cache-banner');
+      if (data.cache_hit) {
+        cacheBanner.classList.remove('hidden');
+        if (data.match_type === 'exact') {
+          cacheBanner.className = "p-4 rounded-2xl border bg-secondary-container/30 border-secondary-fixed text-xs flex flex-col gap-2";
+          document.getElementById('modal-cache-title').innerHTML = `
+            <span class="material-symbols-outlined text-sage-accent text-[16px]">verified</span> Tier 1 Exact Match
+          `;
+          document.getElementById('modal-cache-score').innerText = "100% Match";
+          document.getElementById('modal-cache-score').className = "font-mono text-[11px] font-bold px-2.5 py-0.5 rounded-full bg-secondary-container text-on-secondary-container";
+        } else {
+          cacheBanner.className = "p-4 rounded-2xl border bg-tertiary-container/30 border-tertiary-fixed text-xs flex flex-col gap-2";
+          document.getElementById('modal-cache-title').innerHTML = `
+            <span class="material-symbols-outlined text-tertiary text-[16px]">hub</span> Tier 2 Semantic Cosine Match
+          `;
+          document.getElementById('modal-cache-score').innerText = `Cosine Score: ${data.similarity_score}`;
+          document.getElementById('modal-cache-score').className = "font-mono text-[11px] font-bold px-2.5 py-0.5 rounded-full bg-tertiary-container text-tertiary";
+        }
+        document.getElementById('modal-matched-prompt').innerText = `Matched cached key: "${data.matched_prompt || data.prompt}"`;
+      } else {
+        cacheBanner.classList.add('hidden');
+      }
+
+      // Output / Generated text
+      const outputEl = document.getElementById('modal-output');
+      outputEl.innerText = data.generated_text || "(Output not recorded in historical telemetry record)";
+
+      // Metrics
+      document.getElementById('modal-metric-latency').innerText = `${data.total_latency_ms || 0}ms`;
+      document.getElementById('modal-metric-compute').innerText = `${data.processing_time_ms || 0}ms`;
+      document.getElementById('modal-metric-tokens').innerText = `${data.prompt_tokens || 0} / ${data.generated_tokens || 0}`;
+
+      // Config
+      document.getElementById('modal-cfg-cache').innerText = data.cache_enabled !== false ? 'Enabled' : 'Disabled';
+      document.getElementById('modal-cfg-semantic').innerText = data.semantic_cache_enabled !== false ? 'Enabled' : 'Disabled';
+      document.getElementById('modal-cfg-thresh').innerText = data.similarity_threshold !== undefined ? data.similarity_threshold : '0.90';
+
+      // Raw JSON
+      document.getElementById('modal-raw-json').innerText = JSON.stringify(data, null, 2);
+    }
+
+    function copyModalReqId() {
+      if (!currentInspectedData || !currentInspectedData.request_id) return;
+      navigator.clipboard.writeText(currentInspectedData.request_id).then(() => {
+        const btn = document.getElementById('modal-req-id-btn');
+        const origHtml = btn.innerHTML;
+        btn.innerHTML = `<span class="material-symbols-outlined text-[13px] text-sage-accent">check</span> Copied!`;
+        setTimeout(() => btn.innerHTML = origHtml, 1500);
+      });
+    }
+
+    function copyModalPrompt() {
+      if (!currentInspectedData) return;
+      const text = currentInspectedData.prompt || currentInspectedData.matched_prompt || '';
+      navigator.clipboard.writeText(text).then(() => alert('Prompt copied to clipboard!'));
+    }
+
+    function copyModalOutput() {
+      if (!currentInspectedData) return;
+      const text = currentInspectedData.generated_text || '';
+      navigator.clipboard.writeText(text).then(() => alert('Completion output copied to clipboard!'));
+    }
+
+    function copyModalRawJson() {
+      if (!currentInspectedData) return;
+      navigator.clipboard.writeText(JSON.stringify(currentInspectedData, null, 2)).then(() => alert('Telemetry JSON copied to clipboard!'));
+    }
+
+    function copyCurlForRequest() {
+      if (!currentInspectedData) return;
+      const prompt = currentInspectedData.prompt || currentInspectedData.matched_prompt || '';
+      const maxToks = currentInspectedData.max_new_tokens || 20;
+      const curl = `curl -X POST "http://127.0.0.1:8004/generate?enable_cache=${currentInspectedData.cache_enabled !== false}&enable_semantic_cache=${currentInspectedData.semantic_cache_enabled !== false}&similarity_threshold=${currentInspectedData.similarity_threshold || 0.90}" \\\n  -H "Content-Type: application/json" \\\n  -d '{"prompt": ${JSON.stringify(prompt)}, "max_new_tokens": ${maxToks}}'`;
+      navigator.clipboard.writeText(curl).then(() => alert('cURL command copied to clipboard!'));
+    }
+
+    function loadModalPromptToPlayground() {
+      if (!currentInspectedData) return;
+      const prompt = currentInspectedData.prompt || currentInspectedData.matched_prompt || '';
+      closeRequestModal();
+      switchView('playground');
+      setPrompt(prompt);
+      document.getElementById('prompt-input').focus();
+    }
+
+    // Modal click-outside & ESC handlers
+    window.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape') closeRequestModal();
+    });
+
+    document.addEventListener('DOMContentLoaded', () => {
+      const modal = document.getElementById('request-modal');
+      if (modal) {
+        modal.addEventListener('click', (e) => {
+          if (e.target === modal) closeRequestModal();
+        });
+      }
+
+      // Check URL hash e.g. #req-12345678
+      if (window.location.hash && window.location.hash.startsWith('#req-')) {
+        const reqId = window.location.hash.substring(1);
+        setTimeout(() => inspectRequest(reqId), 500);
+      }
+    });
+  </script>
+
+  <!-- Request Detail Inspector Modal Component -->
+  <div id="request-modal" class="fixed inset-0 z-[100] hidden items-center justify-center p-4 bg-black/50 backdrop-blur-sm transition-opacity duration-200">
+    <div class="glass-panel w-full max-w-2xl lg:max-w-3xl rounded-3xl p-6 md:p-7 flex flex-col gap-5 max-h-[90vh] overflow-hidden shadow-2xl border border-outline-variant/40 bg-surface/95 backdrop-blur-2xl">
+      
+      <!-- Modal Header -->
+      <div class="flex justify-between items-start border-b border-outline-variant/30 pb-4">
+        <div class="flex flex-col gap-1.5">
+          <div class="flex items-center gap-2.5 flex-wrap">
+            <span class="font-headline-md text-xl font-bold text-charcoal-text">Request Inspector</span>
+            <button id="modal-req-id-btn" onclick="copyModalReqId()" title="Click to copy Request ID"
+              class="inline-flex items-center gap-1.5 font-mono text-xs font-semibold px-2.5 py-1 rounded-lg bg-surface-container-high text-charcoal-text border border-outline-variant/50 hover:bg-surface-container-highest transition-colors cursor-pointer">
+              <span id="modal-req-id">req-00000000</span>
+              <span class="material-symbols-outlined text-[13px] opacity-60">content_copy</span>
+            </button>
+            <span id="modal-status-badge"></span>
+          </div>
+          <div class="flex items-center gap-3 text-xs text-on-surface-variant font-medium mt-0.5">
+            <span id="modal-timestamp" class="flex items-center gap-1">
+              <span class="material-symbols-outlined text-[14px]">schedule</span> 2026-09-09 00:00:00
+            </span>
+            <span>•</span>
+            <span id="modal-engine-info">Groq Qwen 2.5 27B</span>
+          </div>
+        </div>
+        <button onclick="closeRequestModal()" 
+          class="w-8 h-8 rounded-full bg-surface-container hover:bg-surface-container-high flex items-center justify-center text-on-surface-variant hover:text-charcoal-text transition-colors cursor-pointer">
+          <span class="material-symbols-outlined text-lg">close</span>
+        </button>
+      </div>
+
+      <!-- Modal Scrollable Content -->
+      <div class="flex-1 overflow-y-auto pr-1 flex flex-col gap-5 text-sm hide-scrollbar">
+
+        <!-- Prompt Section -->
+        <div class="flex flex-col gap-2">
+          <div class="flex justify-between items-center">
+            <label class="font-label-md text-xs text-on-surface-variant uppercase tracking-wider font-semibold flex items-center gap-1.5">
+              <span class="material-symbols-outlined text-[15px] text-sage-accent">edit_note</span> Prompt Input
+            </label>
+            <div class="flex items-center gap-3">
+              <button onclick="loadModalPromptToPlayground()" class="text-xs font-semibold text-sage-accent hover:underline flex items-center gap-1 cursor-pointer">
+                <span class="material-symbols-outlined text-[14px]">play_arrow</span> Open in Playground
+              </button>
+              <span class="text-outline-variant">•</span>
+              <button onclick="copyModalPrompt()" class="text-xs font-semibold text-on-surface-variant hover:text-charcoal-text flex items-center gap-1 cursor-pointer">
+                <span class="material-symbols-outlined text-[14px]">content_copy</span> Copy
+              </button>
+            </div>
+          </div>
+          <div id="modal-prompt" class="p-4 rounded-2xl bg-surface-container-lowest border border-outline-variant/30 font-code-md text-xs md:text-sm text-charcoal-text whitespace-pre-wrap leading-relaxed"></div>
+        </div>
+
+        <!-- Cache Match Banner (if cache hit) -->
+        <div id="modal-cache-banner" class="hidden p-4 rounded-2xl border text-xs flex flex-col gap-2">
+          <div class="flex items-center justify-between">
+            <div id="modal-cache-title" class="font-bold flex items-center gap-1.5"></div>
+            <span id="modal-cache-score" class="font-mono text-[11px] font-bold px-2.5 py-0.5 rounded-full"></span>
+          </div>
+          <div id="modal-matched-prompt" class="font-mono text-on-surface-variant bg-surface/60 p-2.5 rounded-xl border border-outline-variant/20"></div>
+        </div>
+
+        <!-- Output / Completion Section -->
+        <div class="flex flex-col gap-2">
+          <div class="flex justify-between items-center">
+            <label class="font-label-md text-xs text-on-surface-variant uppercase tracking-wider font-semibold flex items-center gap-1.5">
+              <span class="material-symbols-outlined text-[15px] text-terracotta-accent">smart_toy</span> Generated Output / Completion
+            </label>
+            <button onclick="copyModalOutput()" class="text-xs font-semibold text-on-surface-variant hover:text-charcoal-text flex items-center gap-1 cursor-pointer">
+              <span class="material-symbols-outlined text-[14px]">content_copy</span> Copy Output
+            </button>
+          </div>
+          <div id="modal-output" class="p-4 rounded-2xl bg-surface-container-lowest border border-outline-variant/30 font-code-md text-xs md:text-sm text-charcoal-text whitespace-pre-wrap leading-relaxed min-h-[70px]"></div>
+        </div>
+
+        <!-- Telemetry & Performance Metrics -->
+        <div>
+          <label class="font-label-md text-xs text-on-surface-variant uppercase tracking-wider font-semibold block mb-2">Performance & Tokens</label>
+          <div class="grid grid-cols-3 gap-3">
+            <div class="bg-surface-container-lowest border border-outline-variant/30 rounded-2xl p-3 flex flex-col items-center justify-center text-center">
+              <span id="modal-metric-latency" class="font-headline-md font-bold text-charcoal-text text-lg">0ms</span>
+              <span class="text-[10px] text-on-surface-variant uppercase tracking-wider mt-0.5">Total Latency</span>
+            </div>
+            <div class="bg-surface-container-lowest border border-outline-variant/30 rounded-2xl p-3 flex flex-col items-center justify-center text-center">
+              <span id="modal-metric-compute" class="font-headline-md font-bold text-charcoal-text text-lg">0ms</span>
+              <span class="text-[10px] text-on-surface-variant uppercase tracking-wider mt-0.5">Inference Proc</span>
+            </div>
+            <div class="bg-surface-container-lowest border border-outline-variant/30 rounded-2xl p-3 flex flex-col items-center justify-center text-center">
+              <span id="modal-metric-tokens" class="font-headline-md font-bold text-charcoal-text text-lg">0 / 0</span>
+              <span class="text-[10px] text-on-surface-variant uppercase tracking-wider mt-0.5">Prompt / Gen Tokens</span>
+            </div>
+          </div>
+        </div>
+
+        <!-- Engine & Pipeline Configuration -->
+        <div class="bg-surface-container-low rounded-2xl p-4 border border-outline-variant/30">
+          <label class="font-label-md text-xs text-on-surface-variant uppercase tracking-wider font-semibold block mb-2">Two-Tier Cache Configuration</label>
+          <div class="grid grid-cols-3 gap-2 text-xs">
+            <div>
+              <span class="text-on-surface-variant text-[11px] block">Tier 1 Exact Cache:</span>
+              <span id="modal-cfg-cache" class="font-semibold text-charcoal-text">Enabled</span>
+            </div>
+            <div>
+              <span class="text-on-surface-variant text-[11px] block">Tier 2 Semantic Cache:</span>
+              <span id="modal-cfg-semantic" class="font-semibold text-charcoal-text">Enabled</span>
+            </div>
+            <div>
+              <span class="text-on-surface-variant text-[11px] block">Cosine Threshold:</span>
+              <span id="modal-cfg-thresh" class="font-mono font-semibold text-tertiary">0.90</span>
+            </div>
+          </div>
+        </div>
+
+        <!-- Raw JSON Telemetry Details (Collapsible) -->
+        <details class="bg-surface-container-lowest border border-outline-variant/30 rounded-2xl p-3 text-xs group">
+          <summary class="font-label-md font-semibold text-on-surface-variant cursor-pointer hover:text-charcoal-text flex items-center justify-between">
+            <span class="flex items-center gap-1.5">
+              <span class="material-symbols-outlined text-[14px]">data_object</span> Raw JSON Telemetry Payload
+            </span>
+            <button type="button" onclick="event.stopPropagation(); copyModalRawJson();" class="text-sage-accent text-[11px] hover:underline font-semibold cursor-pointer">Copy JSON</button>
+          </summary>
+          <pre id="modal-raw-json" class="mt-3 p-3 bg-surface-container rounded-xl font-mono text-[11px] overflow-x-auto text-on-surface"></pre>
+        </details>
+
+      </div>
+
+      <!-- Modal Footer Actions -->
+      <div class="flex justify-between items-center pt-3 border-t border-outline-variant/30 text-xs">
+        <button onclick="copyCurlForRequest()" class="px-4 py-2 rounded-full bg-surface-container hover:bg-surface-container-high text-charcoal-text border border-outline-variant/40 font-semibold flex items-center gap-1.5 transition-colors cursor-pointer">
+          <span class="material-symbols-outlined text-[15px]">terminal</span> Copy cURL
+        </button>
+        <button onclick="closeRequestModal()" class="px-5 py-2 rounded-full bg-charcoal-text hover:bg-terracotta-accent text-white font-semibold transition-colors cursor-pointer">
+          Done
+        </button>
+      </div>
+    </div>
+  </div>
+</body>
+
+</html>
