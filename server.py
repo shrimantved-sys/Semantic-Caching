@@ -13,9 +13,16 @@ from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.responses import FileResponse
 import httpx
+from mangum import Mangum
 from pydantic import BaseModel, Field
-import torch
-from transformers import AutoModel, AutoTokenizer
+
+from aws_storage import (
+    AWS_REGION,
+    DynamoDBCacheStore,
+    DynamoDBTelemetryStore,
+    EmbeddingManager,
+    compute_cosine_similarity,
+)
 
 # Load environment variables from .env file
 load_dotenv()
@@ -28,41 +35,20 @@ GROQ_API_KEY = os.environ.get("GROQ_API_KEY", "").strip()
 GROQ_MODEL_NAME = os.environ.get("GROQ_MODEL_NAME", "qwen/qwen3.8-27b")
 GROQ_API_URL = "https://api.groq.com/openai/v1/chat/completions"
 
-EMBEDDING_MODEL_NAME = "sentence-transformers/all-MiniLM-L6-v2"
-LOG_FILE_PATH = "telemetry_metrics.jsonl"
-DEFAULT_CACHE_TTL_SECONDS = 3600.0
+LOG_FILE_PATH = os.environ.get("LOG_FILE_PATH", "telemetry_metrics.jsonl")
+DEFAULT_CACHE_TTL_SECONDS = float(os.environ.get("DEFAULT_CACHE_TTL_SECONDS", "3600.0"))
 AUTO_SHUTDOWN_SECONDS = float(os.environ.get("AUTO_SHUTDOWN_SECONDS", "0"))
 INDEX_HTML_PATH = "index.html" if os.path.exists("index.html") else os.path.join("static", "index.html")
 
-# Embedding model for Tier 2 semantic matching
-logger.info("Loading embedding model '%s'...", EMBEDDING_MODEL_NAME)
-emb_tokenizer = AutoTokenizer.from_pretrained(EMBEDDING_MODEL_NAME)
-emb_model = AutoModel.from_pretrained(EMBEDDING_MODEL_NAME)
-emb_model.eval()
+# AWS and Local Providers
+embedding_manager = EmbeddingManager()
+dynamodb_cache_store = DynamoDBCacheStore()
+dynamodb_telemetry_store = DynamoDBTelemetryStore()
 
 
-def compute_embedding(prompt: str) -> Optional[torch.Tensor]:
-    """Compute normalized mean-pooled sentence embedding for a prompt."""
-    clean = prompt.strip()
-    if not clean:
-        return None
-    try:
-        encoded = emb_tokenizer([clean], padding=True, truncation=True, return_tensors="pt")
-        with torch.no_grad():
-            outputs = emb_model(**encoded)
-            token_embeddings = outputs[0]
-            mask = encoded["attention_mask"].unsqueeze(-1).expand(token_embeddings.size()).float()
-            sum_embeddings = torch.sum(token_embeddings * mask, dim=1)
-            sum_mask = torch.clamp(mask.sum(dim=1), min=1e-9)
-            mean_pooled = sum_embeddings / sum_mask
-            return torch.nn.functional.normalize(mean_pooled, p=2, dim=1)[0]
-    except Exception as e:
-        logger.error("Failed to compute embedding for prompt: %r. Error: %s", prompt, e)
-        return None
-
-
-def compute_cosine_similarity(vec_a: torch.Tensor, vec_b: torch.Tensor) -> float:
-    return float(torch.dot(vec_a, vec_b).item())
+def compute_embedding(prompt: str) -> Optional[list[float]]:
+    """Compute normalized sentence embedding using the active provider (Bedrock Titan or Local)."""
+    return embedding_manager.compute_embedding(prompt)
 
 
 @dataclass(slots=True)
@@ -70,7 +56,7 @@ class CacheEntry:
     prompt: str
     max_new_tokens: int
     response_text: str
-    embedding: Optional[torch.Tensor]
+    embedding: Optional[list[float]]
     timestamp: float
     prompt_tokens: int = 0
     generated_tokens: int = 0
@@ -81,11 +67,21 @@ class CacheEntry:
 
 
 class TwoTierCache:
-    """Two-tier cache combining exact string lookup (Tier 1) and semantic similarity (Tier 2)."""
+    """Two-tier cache combining exact string lookup (Tier 1) and semantic similarity (Tier 2).
 
-    def __init__(self, default_ttl_seconds: float = DEFAULT_CACHE_TTL_SECONDS):
+    Supports:
+    - L1 Warm In-Memory Cache (fast, sub-millisecond)
+    - L2 Serverless Persistent Cache (Amazon DynamoDB with TTL)
+    """
+
+    def __init__(
+        self,
+        default_ttl_seconds: float = DEFAULT_CACHE_TTL_SECONDS,
+        dynamodb_store: Optional[DynamoDBCacheStore] = None
+    ):
         self.default_ttl_seconds = default_ttl_seconds
         self.entries: dict[tuple[str, int], CacheEntry] = {}
+        self.dynamodb_store = dynamodb_store or dynamodb_cache_store
 
     def _evict_expired(self, max_age_seconds: Optional[float] = None) -> None:
         ttl = max_age_seconds if max_age_seconds is not None else self.default_ttl_seconds
@@ -101,23 +97,48 @@ class TwoTierCache:
         max_age_seconds: Optional[float] = None
     ) -> Optional[CacheEntry]:
         self._evict_expired(max_age_seconds)
-        return self.entries.get((prompt.strip(), max_new_tokens))
+        clean = prompt.strip()
+        key = (clean, max_new_tokens)
+
+        # 1. Check L1 In-Memory Cache
+        if key in self.entries:
+            return self.entries[key]
+
+        # 2. Check L2 DynamoDB Persistent Cache
+        if self.dynamodb_store and self.dynamodb_store.is_available:
+            ttl = max_age_seconds if max_age_seconds is not None else self.default_ttl_seconds
+            item = self.dynamodb_store.get_exact(clean, max_new_tokens, ttl)
+            if item:
+                entry = CacheEntry(
+                    prompt=item.get("prompt", clean),
+                    max_new_tokens=item.get("max_new_tokens", max_new_tokens),
+                    response_text=item.get("response_text", ""),
+                    embedding=item.get("embedding"),
+                    timestamp=item.get("timestamp", time.time()),
+                    prompt_tokens=item.get("prompt_tokens", 0),
+                    generated_tokens=item.get("generated_tokens", 0),
+                    total_model_tokens=item.get("total_model_tokens", 0)
+                )
+                # Populate warm L1 cache
+                self.entries[key] = entry
+                return entry
+
+        return None
 
     def lookup_semantic(
         self,
-        prompt_embedding: torch.Tensor,
+        prompt_embedding: list[float],
         max_new_tokens: int,
         similarity_threshold: float,
         max_age_seconds: Optional[float] = None
     ) -> tuple[Optional[CacheEntry], Optional[float]]:
         self._evict_expired(max_age_seconds)
 
+        # 1. Search L1 In-Memory Candidates
         candidates = [
             entry for (_, tok), entry in self.entries.items()
             if tok == max_new_tokens and entry.embedding is not None
         ]
-        if not candidates:
-            return None, None
 
         best_entry: Optional[CacheEntry] = None
         best_sim = -1.0
@@ -134,6 +155,36 @@ class TwoTierCache:
         if best_entry is not None and best_sim >= similarity_threshold:
             return best_entry, round(best_sim, 4)
 
+        # 2. Search L2 DynamoDB Candidates (Cross-instance shared cache)
+        if self.dynamodb_store and self.dynamodb_store.is_available:
+            ttl = max_age_seconds if max_age_seconds is not None else self.default_ttl_seconds
+            db_candidates = self.dynamodb_store.get_candidates(max_new_tokens, ttl)
+            for item in db_candidates:
+                emb = item.get("embedding")
+                if not emb:
+                    continue
+                try:
+                    sim = compute_cosine_similarity(prompt_embedding, emb)
+                    if sim > best_sim:
+                        best_sim = sim
+                        best_entry = CacheEntry(
+                            prompt=item.get("prompt", ""),
+                            max_new_tokens=item.get("max_new_tokens", max_new_tokens),
+                            response_text=item.get("response_text", ""),
+                            embedding=emb,
+                            timestamp=item.get("timestamp", time.time()),
+                            prompt_tokens=item.get("prompt_tokens", 0),
+                            generated_tokens=item.get("generated_tokens", 0),
+                            total_model_tokens=item.get("total_model_tokens", 0)
+                        )
+                        # Warm L1 cache with this candidate
+                        self.entries[(best_entry.prompt, max_new_tokens)] = best_entry
+                except Exception as e:
+                    logger.warning("Error comparing DynamoDB candidate: %s", e)
+
+        if best_entry is not None and best_sim >= similarity_threshold:
+            return best_entry, round(best_sim, 4)
+
         return None, round(best_sim, 4) if best_entry is not None else None
 
     def insert(
@@ -141,7 +192,7 @@ class TwoTierCache:
         prompt: str,
         max_new_tokens: int,
         response_text: str,
-        embedding: Optional[torch.Tensor] = None,
+        embedding: Optional[list[float]] = None,
         prompt_tokens: int = 0,
         generated_tokens: int = 0,
         total_model_tokens: int = 0
@@ -160,29 +211,60 @@ class TwoTierCache:
             generated_tokens=generated_tokens,
             total_model_tokens=total_model_tokens
         )
+        # Populate L1
         self.entries[(clean, max_new_tokens)] = entry
+
+        # Persist to L2 DynamoDB
+        if self.dynamodb_store and self.dynamodb_store.is_available:
+            self.dynamodb_store.put_entry(
+                prompt=clean,
+                max_new_tokens=max_new_tokens,
+                response_text=response_text,
+                embedding=embedding,
+                prompt_tokens=prompt_tokens,
+                generated_tokens=generated_tokens,
+                total_model_tokens=total_model_tokens,
+                ttl_seconds=self.default_ttl_seconds
+            )
+
         return entry
 
     def clear(self, prompt: Optional[str] = None) -> int:
+        count = 0
         if prompt:
             clean = prompt.strip()
             keys = [k for k in self.entries if k[0] == clean]
             for k in keys:
                 del self.entries[k]
-            return len(keys)
-        count = len(self.entries)
-        self.entries.clear()
+            count = len(keys)
+        else:
+            count = len(self.entries)
+            self.entries.clear()
+
+        # Clear in DynamoDB
+        if self.dynamodb_store and self.dynamodb_store.is_available:
+            db_cleared = self.dynamodb_store.clear(prompt)
+            count = max(count, db_cleared)
+
         return count
 
 
 # App State
-two_tier_cache = TwoTierCache()
+two_tier_cache = TwoTierCache(dynamodb_store=dynamodb_cache_store)
 http_client: Optional[httpx.AsyncClient] = None
 
 
 def append_telemetry_log(record: dict) -> None:
-    with open(LOG_FILE_PATH, "a", encoding="utf-8") as f:
-        f.write(json.dumps(record) + "\n")
+    # 1. DynamoDB Telemetry Table
+    if dynamodb_telemetry_store.is_available:
+        dynamodb_telemetry_store.append_log(record)
+
+    # 2. Local JSONL File (Fallback & local dev)
+    try:
+        with open(LOG_FILE_PATH, "a", encoding="utf-8") as f:
+            f.write(json.dumps(record) + "\n")
+    except Exception as e:
+        logger.debug("Could not write to local log file: %s", e)
 
 
 async def async_process_prompt(prompt: str, max_new_tokens: int) -> dict:
@@ -249,8 +331,8 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(
-    title="LLM Inference Server - Two-Tier Cache Architecture",
-    description="Inference server with Tier 1 exact match cache and Tier 2 semantic embedding cache.",
+    title="LLM Inference Server - Two-Tier Cache on AWS Lambda",
+    description="Inference server with Tier 1 exact match cache and Tier 2 semantic embedding cache on AWS Lambda & DynamoDB.",
     lifespan=lifespan
 )
 
@@ -338,23 +420,44 @@ def _record_and_build_response(
 @app.get("/")
 @app.get("/playground")
 def playground():
-    return FileResponse(INDEX_HTML_PATH)
+    if os.path.exists(INDEX_HTML_PATH):
+        return FileResponse(INDEX_HTML_PATH)
+    return {"message": "Semantic Cache LLM Inference Server (AWS Lambda)"}
 
 
 @app.get("/api/status")
 def status_api():
+    total_entries = len(two_tier_cache.entries)
+    if dynamodb_cache_store.is_available:
+        try:
+            db_entries = len(dynamodb_cache_store.list_entries(limit=100))
+            total_entries = max(total_entries, db_entries)
+        except Exception:
+            pass
+
     return {
         "status": "ok",
-        "stage": "Two-Tier Cache Architecture (Tier 1 Exact + Tier 2 Semantic)",
+        "stage": "Two-Tier Cache Architecture (AWS Lambda + DynamoDB)",
+        "aws_region": AWS_REGION,
+        "embedding_provider": embedding_manager.provider_name,
+        "dynamodb_cache_available": dynamodb_cache_store.is_available,
+        "dynamodb_telemetry_available": dynamodb_telemetry_store.is_available,
         "generative_model": GROQ_MODEL_NAME,
         "log_file": LOG_FILE_PATH,
-        "cache_entries": len(two_tier_cache.entries),
+        "cache_entries": total_entries,
         "cache_ttl_seconds": two_tier_cache.default_ttl_seconds
     }
 
 
 @app.get("/api/cache_entries")
 def get_cache_entries():
+    # 1. DynamoDB Entries (Cross-instance)
+    if dynamodb_cache_store.is_available:
+        db_items = dynamodb_cache_store.list_entries(limit=100)
+        if db_items:
+            return db_items
+
+    # 2. Local Fallback
     two_tier_cache._evict_expired()
     now = time.time()
     return [
@@ -372,6 +475,13 @@ def get_cache_entries():
 
 @app.get("/api/logs")
 def get_logs(limit: int = Query(default=50, ge=1, le=500)):
+    # 1. DynamoDB Logs
+    if dynamodb_telemetry_store.is_available:
+        db_logs = dynamodb_telemetry_store.get_logs(limit=limit)
+        if db_logs:
+            return db_logs
+
+    # 2. Local File Fallback
     if not os.path.exists(LOG_FILE_PATH):
         return []
     records = []
@@ -424,6 +534,13 @@ def get_prompt_results():
 
 @app.get("/api/request/{request_id}")
 def get_request_by_id(request_id: str):
+    # 1. DynamoDB
+    if dynamodb_telemetry_store.is_available:
+        item = dynamodb_telemetry_store.get_by_id(request_id)
+        if item:
+            return item
+
+    # 2. Local File
     if not os.path.exists(LOG_FILE_PATH):
         raise HTTPException(status_code=404, detail="No telemetry logs found.")
     with open(LOG_FILE_PATH, "r", encoding="utf-8") as f:
@@ -465,7 +582,7 @@ async def generate(
     request_id = f"req-{uuid.uuid4().hex[:8]}"
     arrival_time = time.time()
 
-    # Tier 1: Exact Match Cache
+    # Tier 1: Exact Match Cache (L1 in-memory + L2 DynamoDB)
     if enable_cache:
         exact_entry = two_tier_cache.lookup_exact(clean_prompt, request.max_new_tokens, max_age_seconds=cache_ttl)
         if exact_entry is not None:
@@ -487,11 +604,15 @@ async def generate(
                 similarity_threshold=similarity_threshold
             )
 
-    # Tier 2: Semantic Similarity Cache
-    prompt_emb: Optional[torch.Tensor] = None
+    # Tier 2: Semantic Similarity Cache (L1 in-memory + L2 DynamoDB)
+    prompt_emb: Optional[list[float]] = None
     loop = asyncio.get_running_loop()
 
-    if enable_cache and enable_semantic_cache and len(two_tier_cache.entries) > 0:
+    has_entries = len(two_tier_cache.entries) > 0 or (
+        two_tier_cache.dynamodb_store and two_tier_cache.dynamodb_store.is_available
+    )
+
+    if enable_cache and enable_semantic_cache and has_entries:
         try:
             prompt_emb = await loop.run_in_executor(None, compute_embedding, clean_prompt)
             if prompt_emb is not None:
@@ -560,6 +681,9 @@ async def generate(
         similarity_threshold=similarity_threshold
     )
 
+
+# AWS Lambda entrypoint adapter
+handler = Mangum(app, lifespan="off")
 
 if __name__ == "__main__":
     import uvicorn
