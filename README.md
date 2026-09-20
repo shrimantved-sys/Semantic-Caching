@@ -67,33 +67,33 @@ flowchart TD
 Building this wasn't an overnight "download a library and call it a day" project. We went through distinct iterative phases, running into real engineering bottlenecks and learning what works and what doesn't.
 
 ```
-[Phase 1: Raw Prototype]  ──>  [Phase 2: Telemetry & Metrics]
+[Stage A: Raw Prototype]  ──>  [Stage B: Telemetry & Metrics]
                                         │
                                         ▼
-[Phase 4: Exact Caching]  <──  [Phase 3: The Batching Experiment]
+[Stage D: Exact Caching]  <──  [Stage C: The Batching Experiment]
          │
          ▼
 [Stage E: Two-Tier Semantic Architecture (server.py + index.html)]
 ```
 
-### Phase 1: The Raw Prototype
+### Stage A: The Raw Prototype
 We started simple: a minimal FastAPI endpoint in `server.py` wrapping direct calls to Groq API.
 - *What worked*: Groq was fast (~300–400ms).
 - *The bottleneck*: Testing the same query or slightly different prompts repeatedly drained API rate limits quickly and added unnecessary network round-trip delay.
 
-### Phase 2: Observability & Telemetry
+### Stage B: Observability & Telemetry
 Before optimizing, we needed real data. We added structured JSONL logging in `server.py`:
 - Prompt character length vs. token counts (prompt tokens, generated tokens, total tokens).
 - Precise latency breakdown: request arrival timestamp, processing time, and total latency.
 - Unique request IDs (`req-xxxxxxxx`) for end-to-end trace auditing.
 
-### Phase 3: The Dynamic Batching Experiment
+### Stage C: The Dynamic Batching Experiment
 Next, we tested dynamic request batching:
 - We implemented an `asyncio.Queue` and a background worker collecting requests over a time window (`BATCH_TIMEOUT = 200ms`, `MAX_BATCH_SIZE = 4`).
 - *The revelation*: While batching is helpful for local GPU matrix multiplications, in an interactive user-facing API using cloud endpoints, **batch timeout queues introduce artificial delay for single incoming requests**. A user with an urgent question had to wait up to 200ms just to see if another user would show up.
 - *The decision*: We stripped out the batch queuing mechanism completely. Individual misses fly straight to the model with zero wait, while the caching tiers handle throughput and cost reduction.
 
-### Phase 4: Exact-Match In-Memory Cache
+### Stage D: Exact-Match In-Memory Cache
 We introduced an exact string cache with automatic TTL expiration into `server.py`:
 - Identical queries dropped from **400ms to 0.05ms** — an 8,000x speedup!
 - *The catch*: Real users rarely type identical strings. A user typing `"What is sun's size?"` got zero benefit if the cache held `"How big is the sun?"`. We were missing over 70% of potential cache hits due to minor lexical differences.
@@ -384,7 +384,3 @@ This automatically:
   ```
 
 ---
-
-## License
-MIT License. Feel free to use, adapt, and build upon this architecture in your own LLM applications!
-
